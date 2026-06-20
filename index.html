@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>P2P File Transfer Criptato - PeerJS</title>
+  <script src="https://unpkg.com/peerjs@1.5.3/dist/peerjs.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 30px auto; max-width: 700px; background: #f5f7fa; }
+    .container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    h2 { margin-top: 0; color: #2c3e50; }
+    label { font-weight: 600; display: block; margin-top: 15px; color: #34495e; }
+    input, button { padding: 10px 14px; border-radius: 8px; border: 1px solid #ddd; font-size: 14px; }
+    input { width: 100%; box-sizing: border-box; }
+    button { background: #3498db; color: white; border: none; cursor: pointer; transition: 0.2s; }
+    button:hover { background: #2980b9; }
+    .btn-danger { background: #e74c3c; }
+    .btn-danger:hover { background: #c0392b; }
+    .btn-success { background: #2ecc71; }
+    .btn-success:hover { background: #27ae60; }
+    .btn-warning { background: #f39c12; }
+    .btn-warning:hover { background: #e67e22; }
+    .flex { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .flex input { flex: 1; }
+    #log { background: #ecf0f1; padding: 12px; height: 150px; overflow-y: scroll; border-radius: 8px; font-family: monospace; font-size: 13px; margin-top: 10px; }
+    .code-box { background: #f8f9fa; border: 1px dashed #bdc3c7; padding: 12px; border-radius: 8px; word-break: break-all; font-family: monospace; font-size: 13px; margin: 8px 0; }
+    hr { margin: 25px 0; border: 0; border-top: 1px solid #eee; }
+    .status { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+    .status.online { background: #d5f5e3; color: #27ae60; }
+    .status.offline { background: #fadbd8; color: #e74c3c; }
+    .status.connecting { background: #fdebd0; color: #f39c12; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>🔐 P2P File Transfer Criptato</h2>
+
+  <!-- Stato e codice unico -->
+  <div style="background: #eaf2f8; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <strong>📋 Il tuo codice unico da condividere:</strong>
+        <span id="status-badge" class="status offline">Offline</span>
+      </div>
+      <button onclick="copyCode()" style="background: #2c3e50; padding: 6px 12px; font-size: 12px;">📋 Copia</button>
+    </div>
+    <div id="shareCode" class="code-box" style="margin-top: 8px;">Genera il codice...</div>
+    <button onclick="generateFullCode()" class="btn-success" style="margin-top: 8px;">🔄 Genera nuovo codice</button>
+    <div style="font-size: 12px; color: #7f8c8d; margin-top: 5px;">Condividi questo codice con il peer remoto per connetterti e trasferire file in sicurezza.</div>
+  </div>
+
+  <!-- Connessione con codice -->
+  <h3>🔗 Connetti al peer remoto</h3>
+  <div class="flex">
+    <input type="text" id="remoteCode" placeholder="Incolla il codice del peer remoto" style="flex: 1;">
+    <button onclick="connectWithCode()" style="width: auto; white-space: nowrap;">Connetti</button>
+  </div>
+
+  <hr>
+
+  <!-- Invio file -->
+  <h3>📤 Invio file</h3>
+  <div class="flex">
+    <input type="file" id="fileInput" style="flex: 1;">
+    <button onclick="sendFile()" class="btn-success" style="width: auto;">Invia file</button>
+  </div>
+
+  <hr>
+
+  <div id="log"></div>
+</div>
+
+<script>
+
+// =============================
+// Stato
+// =============================
+const peer = new Peer();
+let conn = null;
+let myPeerId = null;
+let sharedKey = null;
+
+function log(msg) {
+  document.getElementById('log').innerHTML += "[" + new Date().toLocaleTimeString() + "] " + msg + "<br>";
+  document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+}
+
+function setStatus(status, text) {
+  const badge = document.getElementById('status-badge');
+  badge.className = 'status ' + status;
+  badge.textContent = text;
+}
+
+// =============================
+// PeerJS
+// =============================
+
+peer.on('open', id => {
+  myPeerId = id;
+  setStatus('offline', 'In attesa di connessione');
+  log("✅ Peer aperto: " + id);
+  // Se non c'è già una chiave, generane una
+  if (!sharedKey) {
+    generateFullCode();
+  } else {
+    updateShareCode();
+  }
+});
+
+peer.on('connection', c => {
+  conn = c;
+  setupConnection();
+  log("🔗 Connessione entrante da " + c.peer);
+});
+
+peer.on('error', err => {
+  log("❌ Errore PeerJS: " + err.type);
+  if (err.type === 'unavailable-id') {
+    log("⚠️ ID non disponibile, rigenera il codice.");
+  }
+});
+
+function connectPeer(targetId) {
+  conn = peer.connect(targetId);
+  setupConnection();
+  setStatus('connecting', 'Connessione in corso...');
+}
+
+function setupConnection() {
+  conn.on('open', () => {
+    setStatus('online', 'Connesso!');
+    log("✅ Connesso a " + conn.peer);
+  });
+
+  conn.on('data', async data => {
+    log("📥 Ricevuto file...");
+    await receiveEncrypted(data);
+  });
+
+  conn.on('close', () => {
+    setStatus('offline', 'Disconnesso');
+    log("🔌 Connessione chiusa");
+    conn = null;
+  });
+
+  conn.on('error', err => {
+    log("❌ Errore connessione: " + err);
+    setStatus('offline', 'Errore');
+  });
+}
+
+// =============================
+// Codice unico (Peer ID + Chiave)
+// =============================
+
+function generateFullCode() {
+  // Genera chiave casuale a 32 byte
+  const key = crypto.getRandomValues(new Uint8Array(32));
+  sharedKey = btoa(String.fromCharCode(...key));
+  
+  // Se il peer è già aperto, aggiorna il codice
+  if (myPeerId) {
+    updateShareCode();
+  } else {
+    // Se peer non è ancora aperto, il codice verrà aggiornato all'evento 'open'
+    document.getElementById('shareCode').textContent = "Generazione in corso...";
+    log("🔑 Chiave generata, in attesa dell'ID peer...");
+  }
+  
+  log("🔑 Nuova chiave generata");
+}
+
+function updateShareCode() {
+  // Combina Peer ID e chiave in un unico codice base64
+  // Formato: peerId|key (separati da pipe)
+  const combined = myPeerId + "|" + sharedKey;
+  const encoded = btoa(unescape(encodeURIComponent(combined)));
+  document.getElementById('shareCode').textContent = encoded;
+  log("📋 Nuovo codice generato");
+}
+
+function copyCode() {
+  const code = document.getElementById('shareCode').textContent;
+  if (code && code !== "Genera il codice..." && code !== "Generazione in corso...") {
+    navigator.clipboard.writeText(code).then(() => {
+      log("📋 Codice copiato!");
+    }).catch(() => {
+      // Fallback
+      const textarea = document.createElement('textarea');
+      textarea.value = code;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      log("📋 Codice copiato!");
+    });
+  } else {
+    log("⚠️ Genera prima un codice!");
+  }
+}
+
+// =============================
+// Connessione con codice
+// =============================
+
+function connectWithCode() {
+  const remoteCode = document.getElementById('remoteCode').value.trim();
+  if (!remoteCode) {
+    log("⚠️ Inserisci il codice del peer remoto");
+    return;
+  }
+
+  try {
+    // Decodifica il codice
+    const decoded = decodeURIComponent(escape(atob(remoteCode)));
+    const parts = decoded.split('|');
+    if (parts.length !== 2) {
+      log("❌ Codice non valido (formato errato)");
+      return;
+    }
+    const remotePeerId = parts[0];
+    const remoteKey = parts[1];
+
+    // Imposta la chiave ricevuta (in questo modo usiamo la chiave del mittente)
+    sharedKey = remoteKey;
+    document.getElementById('shareCode').textContent = "🔑 Chiave importata dal codice remoto";
+
+    log("🔗 Connessione a " + remotePeerId + "...");
+    connectPeer(remotePeerId);
+
+  } catch (e) {
+    log("❌ Codice non valido: " + e.message);
+  }
+}
+
+// =============================
+// Crypto
+// =============================
+
+function getKeyBytes() {
+  if (!sharedKey) {
+    log("⚠️ Nessuna chiave disponibile");
+    return null;
+  }
+  try {
+    const binary = atob(sharedKey);
+    return Uint8Array.from(binary, c => c.charCodeAt(0));
+  } catch (e) {
+    log("❌ Errore chiave: " + e.message);
+    return null;
+  }
+}
+
+async function encrypt(data) {
+  const keyBytes = getKeyBytes();
+  if (!keyBytes) throw new Error("Chiave non valida");
+
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", keyBytes, "AES-GCM", false, ["encrypt"]
+  );
+
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+
+  const cipher = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    cryptoKey,
+    data
+  );
+
+  return { cipher, iv };
+}
+
+async function decrypt(cipher, iv) {
+  const keyBytes = getKeyBytes();
+  if (!keyBytes) throw new Error("Chiave non valida");
+
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", keyBytes, "AES-GCM", false, ["decrypt"]
+  );
+
+  return await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    cryptoKey,
+    cipher
+  );
+}
+
+// =============================
+// FILE SEND
+// =============================
+
+async function sendFile() {
+  if (!conn || !conn.open) {
+    log("❌ Non connesso");
+    return;
+  }
+
+  const fileInput = document.getElementById('fileInput');
+  const file = fileInput.files[0];
+  if (!file) {
+    log("⚠️ Seleziona un file");
+    return;
+  }
+
+  if (!sharedKey) {
+    log("❌ Genera prima una chiave!");
+    return;
+  }
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+
+    log("🔐 Cifratura in corso... (" + file.name + ")");
+    const { cipher, iv } = await encrypt(arrayBuffer);
+
+    conn.send({
+      name: file.name,
+      type: file.type,
+      cipher,
+      iv
+    });
+
+    log("📤 File inviato: " + file.name + " (" + (file.size / 1024).toFixed(1) + " KB)");
+  } catch (e) {
+    log("❌ Errore invio: " + e.message);
+  }
+}
+
+// =============================
+// FILE RECEIVE
+// =============================
+
+async function receiveEncrypted(data) {
+  log("🔓 Decifratura in corso...");
+
+  try {
+    const plain = await decrypt(data.cipher, data.iv);
+
+    const blob = new Blob([plain], { type: data.type || 'application/octet-stream' });
+
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = data.name || 'file_ricevuto';
+
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+
+    log("✅ File ricevuto: " + (data.name || 'senza nome') + " (" + (blob.size / 1024).toFixed(1) + " KB)");
+  } catch (e) {
+    log("❌ Errore decifratura (chiave errata o file corrotto)");
+    console.error(e);
+  }
+}
+
+// =============================
+// Inizializzazione
+// =============================
+
+// Se il peer si apre dopo, generiamo il codice
+if (peer.id) {
+  generateFullCode();
+} else {
+  // Se non è ancora aperto, la generazione avverrà nell'evento 'open'
+  setTimeout(() => {
+    if (!myPeerId) {
+      document.getElementById('shareCode').textContent = "⏳ Inizializzazione...";
+    }
+  }, 500);
+}
+
+// Gestione pulita connessione in chiusura pagina
+window.addEventListener('beforeunload', () => {
+  if (conn) conn.close();
+  if (peer) peer.destroy();
+});
+
+</script>
+
+</body>
+</html>
